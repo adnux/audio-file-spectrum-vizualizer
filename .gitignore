@@ -16,3 +16,7 @@ vendor/
 .vscode/
 .idea/
 *.swp
+
+# Downloaded ffmpeg binaries (fetched by scripts/download-ffmpeg.sh at build time)
+internal/assets/bins/ffmpeg*
+internal/assets/bins/ffprobe*
