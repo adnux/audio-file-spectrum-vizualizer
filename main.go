@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"time"
 
+	"audio-spectrum-visualizer/internal/assets"
+	"audio-spectrum-visualizer/internal/audio"
 	"audio-spectrum-visualizer/internal/server"
 )
 
@@ -18,6 +20,15 @@ import (
 var staticFiles embed.FS
 
 func main() {
+	// Extract bundled ffmpeg/ffprobe binaries from the embedded assets on first
+	// run; subsequent runs reuse the cached copy.
+	ffmpegPath, ffprobePath, err := assets.Extract()
+	if err != nil {
+		log.Printf("warning: could not extract bundled ffmpeg, falling back to PATH: %v", err)
+	} else {
+		audio.SetBinaryPaths(ffmpegPath, ffprobePath)
+	}
+
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatalf("failed to load embedded static files: %v", err)

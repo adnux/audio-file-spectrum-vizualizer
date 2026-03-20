@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create GitHub releases
+
+jobs:
+  # ── macOS runner: builds darwin + linux single binaries + macOS DMGs ────────
+  build-macos:
+    name: Build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Download ffmpeg (darwin + linux)
+        run: |
+          ./scripts/download-ffmpeg.sh darwin
+          ./scripts/download-ffmpeg.sh linux
+
+      - name: Build darwin-arm64 binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+            go build -ldflags="-s -w" -o dist/spectrum-viz-darwin-arm64 .
+
+      - name: Build darwin-amd64 binary
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+            go build -ldflags="-s -w" -o dist/spectrum-viz-darwin-amd64 .
+
+      - name: Build linux-amd64 binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o dist/spectrum-viz-linux-amd64 .
+
+      - name: Build linux-arm64 binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -ldflags="-s -w" -o dist/spectrum-viz-linux-arm64 .
+
+      - name: Bundle macOS arm64 DMG
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./scripts/bundle-macos.sh arm64
+
+      - name: Bundle macOS amd64 DMG
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./scripts/bundle-macos.sh amd64
+
+      - name: Package linux binaries as ZIPs
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          for arch in amd64 arm64; do
+            zip -j "dist/spectrum-viz-linux-${arch}-${VERSION}.zip" \
+              "dist/spectrum-viz-linux-${arch}" README.md
+          done
+
+      - name: Package darwin binaries as ZIPs
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          for arch in arm64 amd64; do
+            zip -j "dist/spectrum-viz-darwin-${arch}-${VERSION}.zip" \
+              "dist/spectrum-viz-darwin-${arch}" README.md
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+
+  # ── Linux runner: AppImages ──────────────────────────────────────────────────
+  build-linux:
+    name: Build (Linux AppImages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install FUSE (required by appimagetool)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libfuse2
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Download ffmpeg (linux)
+        run: ./scripts/download-ffmpeg.sh linux
+
+      - name: Bundle Linux amd64 AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: amd64
+        run: ./scripts/bundle-linux.sh
+
+      - name: Bundle Linux arm64 AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: arm64
+        run: ./scripts/bundle-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-linux
+          path: dist/*.AppImage
+
+  # ── Windows runner: single .exe ZIP ─────────────────────────────────────────
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download ffmpeg (Windows)
+        shell: bash
+        run: |
+          chmod +x scripts/download-ffmpeg.sh
+          ./scripts/download-ffmpeg.sh windows
+
+      - name: Build windows-amd64 .exe
+        shell: bash
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -ldflags="-s -w" -o dist/spectrum-viz.exe .
+
+      - name: Package as ZIP
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cd dist
+          zip "spectrum-viz-windows-amd64-${VERSION}.zip" spectrum-viz.exe
+          cd ..
+          cp README.md dist/
+          cd dist
+          zip -u "spectrum-viz-windows-amd64-${VERSION}.zip" README.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-windows
+          path: dist/*.zip
+
+  # ── Create GitHub Release with all artifacts ─────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## Audio Spectrum Visualizer ${{ github.ref_name }}
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | macOS Apple Silicon | `spectrum-viz-darwin-arm64-${{ github.ref_name }}.dmg` |
+            | macOS Intel | `spectrum-viz-darwin-amd64-${{ github.ref_name }}.dmg` |
+            | Windows (x64) | `spectrum-viz-windows-amd64-${{ github.ref_name }}.zip` |
+            | Linux (x64) | `spectrum-viz-linux-amd64-${{ github.ref_name }}.AppImage` |
+            | Linux (ARM64) | `spectrum-viz-linux-arm64-${{ github.ref_name }}.AppImage` |
+
+            ### Notes
+            - **macOS**: If Gatekeeper blocks the app, right-click → Open to bypass on first launch.
+            - **Linux**: Make the AppImage executable (`chmod +x *.AppImage`) before running.
+            - **Windows**: SmartScreen may warn on first run — click "More info" → "Run anyway".
+          files: release-assets/*

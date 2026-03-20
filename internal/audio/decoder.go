@@ -18,7 +18,20 @@ var (
 	ffmpegPath  string
 	ffprobePath string
 	ffOnce      sync.Once
+
+	// overrideFfmpeg / overrideFfprobe are set by SetBinaryPaths when the
+	// caller has already extracted bundled binaries from the embedded assets.
+	overrideFfmpeg  string
+	overrideFfprobe string
 )
+
+// SetBinaryPaths overrides the automatic binary discovery with explicit paths.
+// Call this before any audio operation, typically at application startup after
+// extracting embedded binaries via internal/assets.Extract().
+func SetBinaryPaths(ffmpeg, ffprobe string) {
+	overrideFfmpeg = ffmpeg
+	overrideFfprobe = ffprobe
+}
 
 // findBinary returns the path to a named binary, checking next to the
 // current executable first, then falling back to PATH.
@@ -40,6 +53,11 @@ func findBinary(name string) string {
 
 func resolvePaths() {
 	ffOnce.Do(func() {
+		if overrideFfmpeg != "" {
+			ffmpegPath = overrideFfmpeg
+			ffprobePath = overrideFfprobe
+			return
+		}
 		ffmpegPath = findBinary("ffmpeg")
 		ffprobePath = findBinary("ffprobe")
 	})
